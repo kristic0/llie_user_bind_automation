@@ -1,11 +1,14 @@
-import ctypes
-import sys
-import subprocess
-import paramiko
-import subprocess
+from netmiko import ConnectHandler
 import socket
 
-class Net():
+def check_ping(host):
+    try:
+        socket.create_connection((host, 80), timeout=1)
+        return 0
+    except (socket.timeout, OSError):
+        return 1
+
+def get_vlan(ip_address):
     vlan_mapping = {
         "192.168.88.0": 88,
         "192.168.89.0": 89,
@@ -18,40 +21,28 @@ class Net():
         "10.1.70.0": 2000,
     }
 
-    def check_ping(self, host):
-        try:
-            socket.create_connection((host, 80), timeout=1)
-            return 0
-        except (socket.timeout, OSError):
-            return 1
+    try:
+        # Convert IP to a list of integers
+        ip_parts = list(map(int, ip_address.split('.')))
 
-    def get_vlan(self, ip_address):
-        try:
-            # Convert IP to a list of integers
-            ip_parts = list(map(int, ip_address.split('.')))
+        # Iterate through the mapping
+        for base_network, vlan_offset in vlan_mapping.items():
+            # Convert base network to a list of integers
+            base_parts = list(map(int, base_network.split('.')))
 
-            # Iterate through the mapping
-            for base_network, vlan_offset in self.vlan_mapping.items():
-                # Convert base network to a list of integers
-                base_parts = list(map(int, base_network.split('.')))
+            # Check if the IP address matches the base network
+            if ip_parts[:3] == base_parts[:3]:
+                return vlan_offset
 
-                # Check if the IP address matches the base network
-                if ip_parts[:3] == base_parts[:3]:
-                    return vlan_offset
-
-            # If no match is found
-            raise ValueError("No matching VLAN found for the given IP address.")
-        except ValueError:
-            raise ValueError(f"Invalid IP address format. The parameter was: {ip_address}")
+        # If no match is found
+        raise ValueError("No matching VLAN found for the given IP address.")
+    except ValueError:
+        raise ValueError(f"Invalid IP address format. The parameter was: {ip_address}")
 
 
-if __name__ == "__main__":
-    hostname = '192.168.1.253' 
-    port = 22
+def read_file(file_to_read):
     binding_data = []
-    net = Net()
-
-    with open('finance_department.tsv', 'r', encoding='utf-8') as file:
+    with open(file_to_read, 'r', encoding='utf-8') as file:
         file.readline() #skip line
         for line in file:
             data = line.strip().split('|')
@@ -59,51 +50,58 @@ if __name__ == "__main__":
             ip = data[8].strip()
             vlan = ''
             if mac != '' and ip != '':
-                vlan = net.get_vlan(ip)
+                vlan = get_vlan(ip)
                 binding_data.append([mac, ip, vlan])
+    return binding_data
 
-    # print(binding_data)
-    # for user in binding_data:
-    #     print(f"user-bind static ip-address {user[1]} mac-address {user[0]} vlan {user[2]}")
 
-    # input("Press Enter to exit...")
+def send_command(ssh_conn, command):
+    print("Executing: " + command)
+    ssh_conn.send_command_timing(command, )
 
-    if net.check_ping(hostname) == 0:
-        client = paramiko.SSHClient()
-        # Automatically add the server's host key (WARNING: this is insecure in production)
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-        try:
-            username = input("Username: ")
-            password = input("Password: ")
+def send_out_command(ssh_conn, command):
+    print("Executing: " + command)
+    out = ssh_conn.send_command_timing(command)
+    print(out)
 
-            client.connect(hostname, port, username, password, timeout=10, allow_agent=False)
-            channel = client.invoke_shell(width=1000, height=1000)
 
-            # Start of commands
-            channel.send("system-view" + '\n')
-
-            for user in binding_data:
-                channel.send(f"user-bind static ip-address {user[1]} mac-address {user[0]} vlan {user[2]}" + "\n")
-
-            channel.send("\x1a")
-            channel.send("save" + '\n')
-            channel.send("y" + '\n')
-            channel.send('\n')
-            channel.send("quit")
-            # End of commands
-            channel.close()
-
-            while not channel.exit_status_ready():
-                # Read and print the output
-                if channel.recv_ready():
-                    output = channel.recv(4096).decode()
-                    print(output, end='')
+def run_script(device, binding_data):
+    try:
+        # Connect to the device
+        with ConnectHandler(**device) as ssh_conn:
+            print(f"Executing command on {device['host']}:")
+                        
+            send_command(ssh_conn, "system-view")
             
-        finally:
-            if not channel.closed:
-                channel.close()
-    else:
-        print("The host might be down, if not, check your connection!")
+            for user in binding_data:
+                command = f"undo user-bind static ip-address {user[1]} mac-address {user[0]} vlan {user[2]}"
+                send_command(ssh_conn, command)
 
-    ### display dhcp static user-bind all ###
+            send_out_command(ssh_conn, "display dhcp static user-bind all")
+
+    except Exception as e:
+        print(f"Error: {e}")
+
+
+if __name__ == "__main__":
+    hostname = '192.168.1.253' 
+    port = 22
+
+    device_info = {
+        'device_type': 'huawei',  # or the appropriate device type
+        'host': hostname,
+        'username': 'admin',
+        'password': 'Linglong123',
+        'secret': 'Linglong123',
+        'port': 22,  # Change the port if your device uses a different one
+    }
+    
+    if check_ping(hostname) == 0:
+        binding_data = read_file("finance_department.tsv")
+        run_script(device_info, binding_data)
+
+    # username = input("Username: ")
+    # password = input("Password: ")
+
+    # Replace these values with your Teletype switch details
