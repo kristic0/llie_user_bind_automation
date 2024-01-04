@@ -1,6 +1,7 @@
 from netmiko import ConnectHandler
 from netmiko.exceptions import AuthenticationException
 import socket
+import getpass
 
 def check_ping(host):
     try:
@@ -83,9 +84,10 @@ def compare_with_switch(ssh_conn):
 
 def run_script(device, binding_data):
     try:
+        print("Trying to connect to the switch!")
         # Connect to the device
         with ConnectHandler(**device) as ssh_conn:
-            print(f"Executing command on {device['host']}:")
+            print(f"Connected to: {device['host']}:")
             
             binding_data_from_switch = compare_with_switch(ssh_conn)
             users_from_switch = {tuple(elem) for elem in binding_data_from_switch}
@@ -127,8 +129,9 @@ if __name__ == "__main__":
     try:
         if check_ping(device_info['host']) == 0:
             username = input("Enter the username: ")
-            password = input("Enter the password: ")
+            password = getpass.getpass("Enter your password: ")
 
+            device_info['username'] = username
             device_info['password'] = password
             device_info['secret'] = password
 
